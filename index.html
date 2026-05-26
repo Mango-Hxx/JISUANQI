@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>拼多多投产比计算器</title>
+    <style>
+        body { font-family: 'PingFang SC','Microsoft YaHei',sans-serif; background:#f0f2f5; padding:20px; }
+        .container { max-width:1300px; margin:0 auto; }
+        .btn { padding:9px 16px; border-radius:6px; font-size:13px; font-weight:600; cursor:pointer; border:none; background:#e53e3e; color:#fff; margin:4px; }
+        .btn-outline { background:#fff; color:#4a5568; border:1.5px solid #ccc; }
+        .card { background:#fff; border-radius:10px; padding:18px; margin-bottom:14px; box-shadow:0 1px 4px rgba(0,0,0,0.06); }
+        .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(160px,1fr)); gap:12px; }
+        .field label { font-size:13px; font-weight:600; display:block; margin-bottom:4px; }
+        .field input { width:100%; padding:8px; border:1.5px solid #ddd; border-radius:6px; font-size:14px; box-sizing:border-box; }
+        table { width:100%; border-collapse:collapse; font-size:13px; margin-top:8px; }
+        th { background:#f7fafc; padding:8px; border-bottom:2px solid #ddd; }
+        td { padding:6px; border-bottom:1px solid #eee; text-align:center; }
+        .table-input { width:80px; padding:5px; border:1px solid #ddd; border-radius:4px; text-align:center; }
+        .green { background:#c6f6d5; color:#22543d; padding:3px 8px; border-radius:4px; }
+        .red { background:#fed7d7; color:#822727; padding:3px 8px; border-radius:4px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h2>📊 拼多多投产比计算器</h2>
+    <div style="margin-bottom:16px;">
+        <button class="btn btn-outline" onclick="resetAll()">🔄 重置默认</button>
+        <button class="btn btn-outline" onclick="exportCSV()">📥 导出CSV</button>
+        <button class="btn" onclick="addSKU()">➕ 添加SKU</button>
+    </div>
+
+    <div class="card">
+        <h3>⚙️ 全局默认设置</h3>
+        <div class="grid">
+            <div class="field"><label>默认扣点率 (%)</label><input type="number" id="defFee" value="0.6" step="0.01" onchange="refresh()"></div>
+            <div class="field"><label>默认售后率 (%)</label><input type="number" id="defAfter" value="20" step="0.1" onchange="refresh()"></div>
+            <div class="field"><label>默认快递费 (元)</label><input type="number" id="defShip" value="0" step="0.1" onchange="refresh()"></div>
+            <div class="field"><button class="btn btn-outline" onclick="applyDefaults()">📋 应用到全部</button></div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div style="display:flex; justify-content:space-between;">
+            <h3>📦 SKU管理 <span id="skuCount">(0)</span></h3>
+            <div>
+                <button class="btn" onclick="addSKU()">➕ 添加</button>
+                <button class="btn btn-outline" onclick="clearAll()">🗑 清空</button>
+            </div>
+        </div>
+        <table>
+            <thead><tr><th>#</th><th>名称</th><th>售价</th><th>成本</th><th>快递</th><th>扣点%</th><th>售后%</th><th>日单量</th><th>单笔利润</th><th>日利润</th><th>保本投产比</th><th>操作</th></tr></thead>
+            <tbody id="skuBody"></tbody>
+        </table>
+    </div>
+
+    <div class="card">
+        <h3>📈 推广设置</h3>
+        <div class="grid">
+            <div class="field"><label>日推广花费</label><input type="number" id="adSpend" value="500" onchange="refresh()"></div>
+            <div class="field"><label>🎯 目标投产比</label><input type="number" id="targetROI" placeholder="例如 3.0" onchange="refresh()"></div>
+            <div class="field"><label>💰 目标日利润</label><input type="number" id="targetProfit" placeholder="例如 1000" onchange="refresh()"></div>
+        </div>
+        <div id="suggestBox" style="background:#ebf8ff; padding:10px; margin-top:10px; display:none;">
+            💡 建议推广花费：<strong id="suggestValue">¥--</strong>
+            <button class="btn" onclick="applySuggest()">✅ 应用</button>
+        </div>
+        <div style="background:#f0fff4; padding:10px; margin-top:10px;">
+            📊 实际投产比：<strong id="liveROI">--</strong> 
+            💰 净利润/日：<strong id="liveNet">¥0</strong>
+            <span id="badges"></span>
+        </div>
+    </div>
+</div>
+
+<script>
+    // 全局数据
+    var skus = [];
+    var nextId = 1;
+
+    function defaultSkus() {
+        return [
+            { name:'经典T恤-白', price:39.9, cost:18, shipping:0, fee:0.6, after:20, orders:50 },
+            { name:'修身长裤-黑', price:89, cost:42, shipping:0, fee:0.6, after:20, orders:30 },
+            { name:'运动鞋-灰', price:129, cost:68, shipping:0, fee:0.6, after:20, orders:20 },
+            { name:'防晒帽-米', price:29.9, cost:12, shipping:0, fee:0.6, after:20, orders:45 },
+            { name:'通勤包-棕', price:69, cost:35, shipping:0, fee:0.6, after:20, orders:25 }
+        ];
+    }
+
+    function profit(s) {
+        var p = +s.price||0, c = +s.cost||0, sh = +s.shipping||0;
+        var fee = (+s.fee||0)/100, after = (+s.after||0)/100;
+        return p*(1-fee)*(1-after) - sh - c;
+    }
+
+    function totalGross() {
+        var sum = 0;
+        skus.forEach(function(s){ sum += profit(s)*(s.orders||0); });
+        return sum;
+    }
+
+    function sync() {
+        var rows = document.querySelectorAll('#skuBody tr[data-id]');
+        skus = [];
+        rows.forEach(function(row){
+            var id = +row.dataset.id;
+            var inp = row.querySelectorAll('input');
+            skus.push({
+                id:id,
+                name:inp[0].value,
+                price:+inp[1].value||0,
+                cost:+inp[2].value||0,
+                shipping:+inp[3].value||0,
+                fee:+inp[4].value||0,
+                after:+inp[5].value||0,
+                orders:+inp[6].value||0
+            });
+        });
+    }
+
+    function render() {
+        var tbody = document.getElementById('skuBody');
+        if (!skus.length) {
+            tbody.innerHTML = '<tr><td colspan="12">暂无SKU，请点击添加</td></tr>';
+        } else {
+            var html = '';
+            skus.forEach(function(s,i){
+                var pf = profit(s), dp = pf*(s.orders||0);
+                var bep = pf>0.001 ? (s.price/pf).toFixed(2) : '不可保本';
+                html += '<tr data-id="'+s.id+'">'+
+                    '<td>'+(i+1)+'</td>'+
+                    '<td><input class="table-input" style="width:100px;" value="'+esc(s.name)+'" onchange="updateField('+s.id+',\'name\',this.value)"></td>'+
+                    '<td><input class="table-input" type="number" value="'+s.price+'" step="0.01" onchange="updateField('+s.id+',\'price\',this.value)"></td>'+
+                    '<td><input class="table-input" type="number" value="'+s.cost+'" step="0.01" onchange="updateField('+s.id+',\'cost\',this.value)"></td>'+
+                    '<td><input class="table-input" type="number" value="'+s.shipping+'" step="0.1" onchange="updateField('+s.id+',\'shipping\',this.value)"></td>'+
+                    '<td><input class="table-input" type="number" value="'+s.fee+'" step="0.01" onchange="updateField('+s.id+',\'fee\',this.value)"></td>'+
+                    '<td><input class="table-input" type="number" value="'+s.after+'" step="0.1" onchange="updateField('+s.id+',\'after\',this.value)"></td>'+
+                    '<td><input class="table-input" type="number" value="'+s.orders+'" step="1" onchange="updateField('+s.id+',\'orders\',this.value)"></td>'+
+                    '<td><span class="'+(pf>=0.01?'green':(pf<=-0.01?'red':''))+'">¥'+pf.toFixed(2)+'</span></td>'+
+                    '<td><span class="'+(dp>=0.01?'green':(dp<=-0.01?'red':''))+'">¥'+dp.toFixed(2)+'</span></td>'+
+                    '<td><strong style="color:#3182ce;">'+bep+'</strong></td>'+
+                    '<td><button class="btn btn-outline" onclick="deleteSKU('+s.id+')">✕</button></td>'+
+                '</tr>';
+            });
+            tbody.innerHTML = html;
+        }
+        document.getElementById('skuCount').textContent = '('+skus.length+')';
+        updateLive();
+    }
+
+    function esc(s) { var d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }
+
+    window.updateField = function(id, field, val) {
+        sync();
+        var sku = skus.find(function(s){return s.id===id;});
+        if (sku) {
+            sku[field] = (field==='name')? val : (+val||0);
+            save();
+            render();
+        }
+    };
+
+    window.deleteSKU = function(id) {
+        sync();
+        skus = skus.filter(function(s){return s.id!==id;});
+        save();
+        render();
+    };
+
+    window.addSKU = function() {
+        sync();
+        skus.push({
+            id: nextId++,
+            name:'',
+            price:29.9,
+            cost:15,
+            shipping: +document.getElementById('defShip').value||0,
+            fee: +document.getElementById('defFee').value||0.6,
+            after: +document.getElementById('defAfter').value||20,
+            orders:10
+        });
+        save();
+        render();
+    };
+
+    window.clearAll = function() {
+        if (!skus.length) return;
+        if (confirm('清空所有SKU？')) { skus=[]; save(); render(); }
+    };
+
+    window.applyDefaults = function() {
+        sync();
+        var f = +document.getElementById('defFee').value||0.6;
+        var a = +document.getElementById('defAfter').value||20;
+        var s = +document.getElementById('defShip').value||0;
+        skus.forEach(function(sku){ sku.fee=f; sku.after=a; sku.shipping=s; });
+        save();
+        render();
+    };
+
+    window.resetAll = function() {
+        if (confirm('重置为默认SKU？')) {
+            nextId = 1;
+            skus = defaultSkus().map(function(d){ return Object.assign({}, d, {id: nextId++}); });
+            document.getElementById('defFee').value = 0.6;
+            document.getElementById('defAfter').value = 20;
+            document.getElementById('defShip').value = 0;
+            document.getElementById('adSpend').value = 500;
+            document.getElementById('targetROI').value = '';
+            document.getElementById('targetProfit').value = '';
+            save();
+            render();
+        }
+    };
+
+    window.exportCSV = function() {
+        sync();
+        if (!skus.length) return alert('无数据');
+        var csv = '\uFEFF名称,售价,成本,快递,扣点%,售后%,日单量,单笔利润,日利润,保本投产比\n';
+        skus.forEach(function(s){
+            var p = profit(s);
+            var bep = p>0.001 ? (s.price/p).toFixed(2) : '不可保本';
+            csv += '"'+s.name+'",'+s.price+','+s.cost+','+s.shipping+','+s.fee+','+s.after+','+s.orders+','+p.toFixed(2)+','+(p*s.orders).toFixed(2)+','+bep+'\n';
+        });
+        var blob = new Blob([csv],{type:'text/csv'});
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = '投产比数据_'+new Date().toISOString().slice(0,10)+'.csv';
+        a.click();
+    };
+
+    window.applySuggest = function() {
+        var sug = document.getElementById('suggestBox').getAttribute('data-suggested');
+        if (sug && +sug>=0) {
+            document.getElementById('adSpend').value = sug;
+            refresh();
+        }
+    };
+
+    function updateLive() {
+        var gross = totalGross();
+        var ad = +document.getElementById('adSpend').value||0;
+        var net = gross - ad;
+        var roi = ad>0 ? gross/ad : (gross>0 ? Infinity : 0);
+        document.getElementById('liveROI').textContent = (roi===Infinity?'∞':roi.toFixed(2)) + ' : 1';
+        var netEl = document.getElementById('liveNet');
+        netEl.textContent = '¥'+net.toFixed(2);
+        netEl.style.color = net>=0 ? '#22543d' : '#822727';
+        // 目标反馈
+        var tROI = document.getElementById('targetROI').value ? +document.getElementById('targetROI').value : null;
+        var tProfit = document.getElementById('targetProfit').value ? +document.getElementById('targetProfit').value : null;
+        var html = '';
+        if (tROI && tROI>0 && gross>0) {
+            var ok = roi!==Infinity && roi>=tROI;
+            html += '<span style="margin-left:10px;padding:3px 8px;border-radius:4px;background:'+(ok?'#c6f6d5':'#fed7d7')+';">目标ROI '+tROI+':1 '+(ok?'✅已达':'⚠未达')+'</span>';
+        }
+        if (tProfit && tProfit>0) {
+            var okP = net >= tProfit;
+            html += '<span style="margin-left:10px;padding:3px 8px;border-radius:4px;background:'+(okP?'#c6f6d5':'#fed7d7')+';">目标利润 ¥'+tProfit+' '+(okP?'✅已达':'⚠未达')+'</span>';
+        }
+        document.getElementById('badges').innerHTML = html;
+        // 建议推广花费
+        var box = document.getElementById('suggestBox');
+        if (tROI && tROI>0 && gross>0) {
+            var sug = gross / tROI;
+            box.style.display = 'block';
+            document.getElementById('suggestValue').textContent = '¥'+sug.toFixed(2);
+            box.setAttribute('data-suggested', sug.toFixed(2));
+        } else {
+            box.style.display = 'none';
+        }
+    }
+
+    function save() {
+        sync();
+        localStorage.setItem('pdd_skus_online', JSON.stringify(skus));
+        localStorage.setItem('pdd_settings_online', JSON.stringify({
+            defFee: document.getElementById('defFee').value,
+            defAfter: document.getElementById('defAfter').value,
+            defShip: document.getElementById('defShip').value,
+            adSpend: document.getElementById('adSpend').value,
+            targetROI: document.getElementById('targetROI').value,
+            targetProfit: document.getElementById('targetProfit').value
+        }));
+    }
+
+    function load() {
+        try {
+            var saved = localStorage.getItem('pdd_skus_online');
+            if (saved) {
+                var arr = JSON.parse(saved);
+                if (Array.isArray(arr) && arr.length) {
+                    skus = arr.filter(function(s){return s&&s.price!==undefined;});
+                    if (skus.length) nextId = Math.max.apply(null, skus.map(function(s){return s.id||0;})) + 1;
+                }
+            }
+        } catch(e){}
+        if (!skus.length) {
+            skus = defaultSkus().map(function(d){ return Object.assign({}, d, {id: nextId++}); });
+        }
+        try {
+            var sets = localStorage.getItem('pdd_settings_online');
+            if (sets) {
+                var s = JSON.parse(sets);
+                document.getElementById('defFee').value = s.defFee || 0.6;
+                document.getElementById('defAfter').value = s.defAfter || 20;
+                document.getElementById('defShip').value = s.defShip || 0;
+                document.getElementById('adSpend').value = s.adSpend || 500;
+                document.getElementById('targetROI').value = s.targetROI || '';
+                document.getElementById('targetProfit').value = s.targetProfit || '';
+            }
+        } catch(e){}
+    }
+
+    window.refresh = function() {
+        save();
+        render();
+    };
+
+    // 启动
+    load();
+    render();
+</script>
+</body>
+</html>
